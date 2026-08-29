@@ -1,0 +1,39 @@
+# ── 依赖 / 构建产物 ──
+node_modules/
+# electron-vite 构建输出（main/preload/renderer）
+out/
+# electron-builder 打包输出
+dist/
+# pnpm-lock.yaml 故意不忽略：应用项目须提交锁文件以保证可复现安装
+
+# ── 日志与运行时产物 ──
+# dev-daemon 运行产物目录（log/dev-daemon.log、pid/dev-daemon.pid），clean 整目录清理
+log/
+pid/
+*.log
+
+# ── 环境变量（含密钥，勿提交；保留 .env.example 作模板）──
+.env
+.env.*
+!.env.example
+
+# ── 编辑器 / IDE / 系统 ──
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ── TypeScript 增量构建信息 ──
+*.tsbuildinfo
+
+# ── ESLint 缓存 ──
+.eslintcache
+
+# ── 测试覆盖率 ──
+coverage/
+
+# ── 构建工具临时产物 ──
+# electron-vite 5 加载 TS config 生成的临时 bundle（未自清理）
+electron.vite.config.*.mjs
+# pnpm staging 临时目录
+_tmp_*/

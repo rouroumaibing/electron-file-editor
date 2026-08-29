@@ -1,0 +1,61 @@
+# 日常验证 CI（发布链路 L0 层，见 docs/ci-release-pipeline.md）
+#
+# 职责：push / PR 的快速质量门禁，纯验证、零产物、不触发发布。
+#   1. pnpm install --frozen-lockfile（锁文件漂移即失败）
+#   2. pnpm check（tsc --noEmit + eslint）
+#   3. pnpm build（electron-vite 三进程构建冒烟）
+#
+# 触发策略：
+#   - push 到默认分支 / 任意 PR 都跑；
+#   - 文档类改动（docs/**、README*、*.md）不触发，避免无效排队；
+#   - concurrency 按 ref 分组：同一分支连续 push 只保留最新一次运行。
+#
+# 与发布链路的关系：本 workflow 是 L0 门禁；真正打产物走
+# release-desktop.yml（release.published 或手动 dispatch）→ 三平台 build-*.yml。
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - 'README*'
+      - '**/*.md'
+  pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - 'README*'
+      - '**/*.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies (frozen)
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check & lint
+        run: pnpm check
+
+      - name: Build smoke (electron-vite)
+        run: pnpm build

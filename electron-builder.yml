@@ -1,0 +1,56 @@
+appId: com.soundsgreat.fileeditor
+productName: FileEditor
+directories:
+  output: dist
+  buildResources: build
+
+# 只打包构建产物；生产依赖（dependencies）由 electron-builder 自动收集进 asar
+files:
+  - out/**
+
+asar: true
+
+# ── macOS（C1/C2 主战场）───────────────────────────────────────────────
+# 无证书本地打包：CSC_IDENTITY_AUTO_DISCOVERY=false pnpm dist:mac
+#   → 跳过签名（ad-hoc），dmg 可正常产出，本机可直接运行，但分发给别人会被 Gatekeeper 拦。
+# 有证书分发/公证：设置环境变量 CSC_LINK / CSC_KEY_PASSWORD（签名）+
+#   APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID（公证），见 .github/workflows/release-desktop.yml 注释。
+# 无证书时 scripts/dist.mjs 自动降级 ad-hoc（-c.mac.identity=- -c.mac.hardenedRuntime=false），见 docs/ci-release-pipeline.md。
+mac:
+  target: dmg
+  category: public.app-category.developer-tools
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # 最小权限原则：不开 app-sandbox（需自由读写用户选定的工作区，见设计文档 §12.2）
+  darkModeSupport: false
+
+# ── Windows（C2，需在 Windows 环境实测）────────────────────────────────
+# 代码签名（可选但强烈建议，否则 SmartScreen 会拦）：
+#   设置 CSC_LINK（.pfx 证书或证书商店路径）与 CSC_KEY_PASSWORD，
+#   electron-builder 会自动调用 signtool 对 exe 与安装包签名。
+# 架构（x64/arm64）由 scripts/dist.mjs 通过 CLI --x64/--arm64 传入，此处不固定。
+win:
+  target:
+    - nsis
+  # requestedExecutionLevel: 用户级安装，不需要 UAC 提权
+  signingHashAlgorithms: [sha256]
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+  # 卸载时删除用户数据目录的询问交给 NSIS 默认行为，不主动清用户配置
+  deleteAppDataOnUninstall: false
+
+# ── Linux（C2，需在 Linux 环境实测）────────────────────────────────────
+# deb 的 maintainer 字段为必填项；构建时可用 `pnpm dist --email <地址>` 或环境变量
+# DIST_EMAIL 覆盖（scripts/dist.mjs 注入），默认 rouroumaibing@qq.com。
+linux:
+  target:
+    - AppImage
+    - deb
+  maintainer: sounds-great-ai <rouroumaibing@qq.com>
+  category: Development
+  # AppImage 需要的权限修复由 electron-builder 自动处理（chrome-sandbox setuid）

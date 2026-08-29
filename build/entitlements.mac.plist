@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <!-- 最小权限：主进程需要 JIT / 可执行内存来跑 Node/V8；不开启
+         com.apple.security.app-sandbox（保持非沙盒，才能自由读写用户选定的工作区）。
+         访问“下载/文档”等受保护目录的授权逻辑见设计文档 §12.2 validateRootCandidate。 -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+  </dict>
+</plist>

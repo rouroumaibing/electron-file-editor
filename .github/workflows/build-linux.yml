@@ -1,0 +1,92 @@
+# Linux 构建 workflow（发布链路 L2c 层，见 docs/ci-release-pipeline.md）
+#
+# 仅通过 workflow_call 被 release-desktop.yml 调用（不单独触发）。
+#
+# 架构：单 job 双架构（x64 + arm64，AppImage + deb 每架构一个），由 scripts/dist.mjs 默认行为产出。
+#
+# 签名：Linux 包格式无需代码签名（信任模型见 docs/ci-release-pipeline.md §签名与信任模型）。
+#   deb maintainer 由 scripts/dist.mjs 注入（默认 sounds-great-ai <rouroumaibing@qq.com>）。
+#
+# 完整性：verify-artifacts 校验命名 + 生成 SHA256SUMS.linux；
+#         attest-build-provenance 提供构建来源证明（OIDC，免费）。
+#
+# 分发：release.published 触发时 attach 到 release；手动 dry-run 只留 workflow artifact。
+
+name: build-linux
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
+        description: 注入的版本号（无 v 前缀，来自 release tag 或手动输入）
+      upload-to-release:
+        type: boolean
+        required: true
+        description: release.published 触发时为 true（attach 到 release）；手动 dry-run 为 false（仅产 artifact）
+      release-tag:
+        type: string
+        required: false
+        default: ''
+        description: 目标 release 的 tag（attach 用；dry-run 时为空）
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # 打包前统一过质量门禁（tsc + eslint）
+      - run: pnpm check
+
+      - name: Build & package (AppImage + deb, x64 + arm64)
+        run: pnpm dist:linux --version ${{ inputs.version }}
+
+      # 命名校验 + 生成 SHA256SUMS.linux（fail-closed：任一步失败即红）
+      - name: Verify artifacts & generate SHA256SUMS
+        run: node scripts/verify-artifacts.mjs --platform linux --version ${{ inputs.version }} --dir dist/linux --out dist/linux/SHA256SUMS.linux
+
+      # 构建来源证明（OIDC）
+      - uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: |
+            dist/linux/*.AppImage
+            dist/linux/*.deb
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: file-editor-linux
+          path: |
+            dist/linux/*.AppImage
+            dist/linux/*.deb
+            dist/linux/SHA256SUMS.linux
+          if-no-files-found: error
+
+      # release.published 触发才 attach；手动 dry-run 只留 artifact
+      - name: Attach to release
+        if: inputs.upload-to-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release-tag }}
+          files: |
+            dist/linux/*.AppImage
+            dist/linux/*.deb
+            dist/linux/SHA256SUMS.linux

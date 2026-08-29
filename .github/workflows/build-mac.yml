@@ -1,0 +1,153 @@
+# macOS 构建 workflow（发布链路 L2a 层，见 docs/ci-release-pipeline.md）
+#
+# 仅通过 workflow_call 被 release-desktop.yml 调用（不单独触发）。
+#
+# 架构策略（双 job 并行）：
+#   arm64 → macos-latest（Apple Silicon 原生）
+#   x64   → macos-15-intel（Intel 原生，避免在 arm64 runner 上交叉）
+#   项目纯 JS 无原生依赖，双架构各自构建互不依赖，fail-fast: false 保证一个失败不影响另一个。
+#
+# 签名策略：
+#   有 MAC_CERTIFICATE_BASE64（GitHub Secrets）→ 导入临时 keychain，electron-builder 正式签名 + 可选公证；
+#   无证书 → scripts/dist.mjs 自动附加 ad-hoc 签名参数（-c.mac.identity=- -c.mac.hardenedRuntime=false），
+#   Gatekeeper 从「已损坏」降级为「未识别开发者 → 右键打开」。
+#
+# 产物流转：
+#   build job：构建 + 完整性证明（attest-build-provenance）+ 上传 workflow artifact（不直接 attach）；
+#   checksums job：汇总双架构 dmg → 生成 SHA256SUMS.mac → 上传 artifact + 条件 attach release。
+#   （release 页面每个 mac 产物配套一份校验文件，多架构汇总一份，避免校验文件互相覆盖。）
+
+name: build-mac
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
+        description: 注入的版本号（无 v 前缀，来自 release tag 或手动输入）
+      upload-to-release:
+        type: boolean
+        required: true
+        description: release.published 触发时为 true（attach 到 release）；手动 dry-run 为 false（仅产 artifact）
+      release-tag:
+        type: string
+        required: false
+        default: ''
+        description: 目标 release 的 tag（attach 用；dry-run 时为空）
+    # secrets 不在此声明：调用方（release-desktop.yml）用 secrets: inherit 全量透传，
+    # 本 workflow 直接以 ${{ secrets.* }} 访问（MAC_CERTIFICATE_BASE64 等，见文件头注释）。
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  build:
+    name: build-mac-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, x64]
+    runs-on: ${{ matrix.arch == 'x64' && 'macos-15-intel' || 'macos-latest' }}
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # 打包前统一过质量门禁（tsc + eslint），与 ci.yml 同一套校验
+      - run: pnpm check
+
+      # 有证书时导入临时 keychain（无证书则跳过，dist.mjs 自动降级 ad-hoc）。
+      # 注意：GitHub Actions 禁止在 if: 条件中引用 secrets，故用 env + shell 判断。
+      - name: Import macOS certificate
+        env:
+          MAC_CERTIFICATE_BASE64: ${{ secrets.MAC_CERTIFICATE_BASE64 }}
+          MAC_CERTIFICATE_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          if [ -z "$MAC_CERTIFICATE_BASE64" ]; then
+            echo "::notice::No macOS certificate secret — dist.mjs will fall back to ad-hoc signing"
+            exit 0
+          fi
+          CERT_PATH=$RUNNER_TEMP/cert.p12
+          echo -n "$MAC_CERTIFICATE_BASE64" | base64 --decode -o "$CERT_PATH"
+          KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain-db
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security default-keychain -s "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$MAC_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+      - name: Build & package (dmg, ${{ matrix.arch }})
+        env:
+          # 有证书时 electron-builder 自动签名；再配 APPLE_* 三件套即可公证
+          CSC_LINK: ${{ secrets.MAC_CERTIFICATE_BASE64 != '' && format('data:application/pkcs12;base64,{0}', secrets.MAC_CERTIFICATE_BASE64) || '' }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: pnpm dist:mac:${{ matrix.arch }} --version ${{ inputs.version }}
+
+      # 构建来源证明（OIDC，GitHub 免费）：无证书平台最重要的信任补位
+      - uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: dist/mac/*.dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: file-editor-mac-${{ matrix.arch }}
+          path: dist/mac/*.dmg
+          if-no-files-found: error
+
+  # 汇总双架构产物 → 生成一份 SHA256SUMS.mac → attach release
+  checksums:
+    name: checksums + attach (mac)
+    needs: build
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # verify-artifacts.mjs 仅依赖 Node 标准库，无需 pnpm install
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: file-editor-mac-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Verify artifacts & generate SHA256SUMS
+        run: node scripts/verify-artifacts.mjs --platform mac --version ${{ inputs.version }} --dir artifacts --out artifacts/SHA256SUMS.mac
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: file-editor-mac-checksums
+          path: |
+            artifacts/*.dmg
+            artifacts/SHA256SUMS.mac
+          if-no-files-found: error
+
+      # release.published 触发才 attach；手动 dry-run 只留 artifact
+      - name: Attach to release
+        if: inputs.upload-to-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release-tag }}
+          files: |
+            artifacts/*.dmg
+            artifacts/SHA256SUMS.mac

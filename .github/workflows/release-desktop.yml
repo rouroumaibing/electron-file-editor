@@ -1,0 +1,90 @@
+# 发布编排器（发布链路 L1 层，见 docs/ci-release-pipeline.md）
+#
+# 职责：解析版本号 → 扇出三平台可复用构建 workflow → 分发到 release。
+#   L0 日常验证在 ci.yml；本 workflow 只处理「真正要出产物」的发布动作。
+#
+# 触发双模式：
+#   1. release.published —— 在 GitHub 上发布 Release 时触发（打 tag 不会触发，
+#      必须「打 tag + 创建 Release + 点 Publish」），三平台并行构建并 attach 到该 release；
+#   2. workflow_dispatch —— 手动 dry-run：填一个版本号，三平台冒烟打包，
+#      产物只作为 workflow artifact 存档，不碰任何 release。
+#
+# 版本链（全链路唯一参数）：
+#   release tag（v0.2.0）→ resolve-version strip 'v' → inputs.version
+#   → 各平台 build workflow → scripts/dist.mjs --version → -c.extraMetadata.version
+#   → 产物命名 + SHA256SUMS 校验。全程不改写 package.json。
+#
+# 签名凭据（均走 GitHub Secrets，`secrets: inherit` 透传给子 workflow，
+# 缺失时对应端自动降级：mac → ad-hoc，win → 未签名，linux → 无需签名）：
+#   macOS:     MAC_CERTIFICATE_BASE64 / MAC_CERTIFICATE_PASSWORD /
+#              APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID / KEYCHAIN_PASSWORD
+#   Windows:   WIN_CERTIFICATE_BASE64 / WIN_CERTIFICATE_PASSWORD
+
+name: release-desktop
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Dry-run 版本号（semver，如 0.2.0），仅影响产物命名与校验，不会发布'
+        required: true
+        default: '0.0.0-dryrun'
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  # 同一 release tag 的发布不互相取消（发布中断很危险）；不同 ref 可并行
+  group: release-desktop-${{ github.event.release.tag_name || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  # 版本解析：唯一事实来源。release 模式取触发 release 的 tag；dry-run 取手动输入。
+  resolve-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - id: resolve
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+          else
+            # dry-run：容忍用户填 0.2.0 或 v0.2.0（去掉多余 v 前缀）
+            VERSION="${{ github.event.inputs.version }}"
+            TAG="v${VERSION#v}"
+          fi
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  # ── 三平台并行扇出（workflow_call 复用；win/mac/linux 构建步骤完全不同，不用 matrix）──
+  build-mac:
+    needs: resolve-version
+    uses: ./.github/workflows/build-mac.yml
+    with:
+      version: ${{ needs.resolve-version.outputs.version }}
+      upload-to-release: ${{ github.event_name == 'release' }}
+      release-tag: ${{ needs.resolve-version.outputs.tag }}
+    secrets: inherit
+
+  build-windows:
+    needs: resolve-version
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      version: ${{ needs.resolve-version.outputs.version }}
+      upload-to-release: ${{ github.event_name == 'release' }}
+      release-tag: ${{ needs.resolve-version.outputs.tag }}
+    secrets: inherit
+
+  build-linux:
+    needs: resolve-version
+    uses: ./.github/workflows/build-linux.yml
+    with:
+      version: ${{ needs.resolve-version.outputs.version }}
+      upload-to-release: ${{ github.event_name == 'release' }}
+      release-tag: ${{ needs.resolve-version.outputs.tag }}
+    secrets: inherit

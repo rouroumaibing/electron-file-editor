@@ -1,0 +1,13 @@
+# pnpm 11 工作区/配置清单。
+# 单包项目：省略 packages 时仅根包被纳入（等同于普通单包工程）。
+# 注意：pnpm 11 已移除 package.json 里的 "pnpm" 字段，所有非鉴权类配置须放在此处或全局 config.yaml。
+# 见 docs/electron-file-editor-design.md §11.3「pnpm 构建脚本审批」。
+
+# 构建脚本白名单：显式允许以下依赖执行其 install/postinstall，
+# 否则 pnpm 默认拦截（strictDepBuilds=true）并报 ERR_PNPM_IGNORED_BUILDS、exit 1。
+# electron 需下载平台二进制；esbuild 需安装 native 二进制。
+# electron-winstaller 为 Windows 平台专用（Squirrel.Windows），macOS 开发机不需要，显式 false。
+allowBuilds:
+  electron: true
+  electron-winstaller: false
+  esbuild: true
