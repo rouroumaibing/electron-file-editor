@@ -11,3 +11,11 @@ allowBuilds:
   electron: true
   electron-winstaller: false
   esbuild: true
+
+# 依赖覆盖：electron-builder 26.15.3 声明 @electron/get ^3.0.0，但其新增的 cache-mode
+# 功能引用 ElectronDownloadCacheMode（仅 @electron/get 5.x 存在），3.0.0 下运行会崩
+# （Cannot read properties of undefined (reading 'ReadWrite')）。
+# electron@44 本身已用 5.1.0，此处仅强制 app-builder-lib 对齐，见设计文档 §12.1。
+# 语法：pnpm 11 overrides 只接受字符串值，用 parent>child selector 精确指定。
+overrides:
+  'app-builder-lib@26.15.3>@electron/get': 5.1.0

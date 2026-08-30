@@ -52,6 +52,15 @@ npm run e2e -- --keep-ws    # 结束后保留 /tmp/eif-e2e-ws 供人工复现
   （`electron.app undefined` 崩溃）；`CODEBUDDY_SAFE_DELETE_BULK_STATE_DIR` /
   `CODEBUDDY_TOOL_CALL_ID` 会让 vite 清 `out/` 被 safe-delete 拦截。spawn 前必须删除
   这三个变量。
+- **PIT-2b 受限环境需禁沙箱**：WorkBuddy 受限执行环境里 Chromium 沙箱初始化失败
+  （`sandbox initialization failed: Operation not permitted` → GPU 崩溃 → FATAL），
+  必须注入 `ELECTRON_DISABLE_SANDBOX=1` 并传 `--no-sandbox --disable-gpu`（e2e /
+  screenshots 已内置；dev-daemon `start --daemon` 在受限环境需手动注入）。
+- **PIT-2c `ps`/`pkill` 可能被沙箱拦截**：受限环境 `ps -axww` 报
+  `operation not permitted` → 依赖进程枚举的命令（dev-daemon `status` / `stop`、
+  killDev 的 `pkill -f`）会误报"未运行/未发现"、进程残留。脚本收尾若发现 dev 已停但
+  自身进程不退出（stdio pipe 句柄未释放），需外部强杀；钩子还原不受影响（finally +
+  `process.on('exit')` 双重兜底）。用户本机终端无此问题。
 - **PIT-3 CDP 取值**：`Runtime.evaluate` 必须 `returnByValue: true` 才拿得到值。
 - **PIT-11 React 未挂载**：dev 刚起来页面 React 尚未挂载，按钮不存在——先
   `waitFor` 工具栏按钮再点击。

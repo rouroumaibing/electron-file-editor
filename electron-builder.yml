@@ -35,7 +35,9 @@ win:
   target:
     - nsis
   # requestedExecutionLevel: 用户级安装，不需要 UAC 提权
-  signingHashAlgorithms: [sha256]
+  # electron-builder 26.x：signingHashAlgorithms 已从 win 顶层移到 signtoolOptions（旧写法 schema 校验失败）
+  signtoolOptions:
+    signingHashAlgorithms: [sha256]
 
 nsis:
   oneClick: false
