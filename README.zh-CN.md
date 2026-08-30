@@ -20,6 +20,22 @@
   - **会话内撤销 / 重做** —— 工具栏按钮接 Monaco 的 per-model 撤销栈。
 - **可拖拽分栏** —— 侧栏与编辑区之间的分隔条可自由拉伸（最小 160px）。
 
+## 界面截图
+
+所有截图统一存放于 [`docs/images/`](./docs/images/)，可随时通过 `node scripts/screenshots.mjs`（或 `pnpm screenshots`）重新生成 —— 脚本自动拉起 dev 实例、经 CDP 驱动界面并截取渲染进程画面。
+
+| | |
+|---|---|
+| ![主界面](docs/images/screenshot-main.png) | ![图片预览](docs/images/screenshot-image-preview.png) |
+| **主界面** —— 文件树 git 角标（M / A / U）、Monaco 编辑器与脏标记页签、底部状态栏 | **图片预览** —— png / jpg / gif / webp / svg / bmp / ico（扩展名 + magic bytes 双校验，§6.5） |
+
+| | |
+|---|---|
+| ![不支持格式提示](docs/images/screenshot-unsupported.png) | ![设置面板](docs/images/screenshot-settings.png) |
+| **不支持格式** —— 二进制文件显示友好提示而非乱码（§6.1 / §13） | **设置** —— 可选自动定时保存与间隔（§14） |
+
+> 演示工作区由脚本在 `/tmp/eif-shot-ws` 从零重建，截图始终反映当前构建，且不会泄漏本地文件。
+
 ## 技术栈
 
 - **Electron 44** + **electron-vite 5**（main / preload / renderer 三进程构建）
@@ -77,6 +93,7 @@ pnpm stop              # 停止后台进程（终止整个进程组）
 | `pnpm lint` | 仅 ESLint（`eslint .`） |
 | `pnpm lint:fix` | ESLint 自动修复 |
 | `pnpm e2e` | **UI 端到端测试** —— CDP 驱动真实 dev 实例（5 个场景：手动保存 / 重载二次确认 / 保留当前版本 / 自动保存 / clean 自动重载；零 npm 依赖，约 90–120s，见 `scripts/e2e/README.md`） |
+| `pnpm screenshots` | 重新生成 `docs/images/` 下的截图（经 CDP 驱动真实 dev 实例，见 `scripts/screenshots.mjs`） |
 | `pnpm clean` | 删除构建产物（`out/`、`dist/`） |
 | `pnpm clean deep` | 额外删除 `node_modules/` 与 `pnpm-lock.yaml`（彻底重装） |
 

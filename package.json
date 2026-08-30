@@ -29,6 +29,7 @@
     "lint:fix": "eslint . --fix",
     "check": "tsc --noEmit && eslint .",
     "e2e": "node scripts/e2e/run.mjs",
+    "screenshots": "node scripts/screenshots.mjs",
     "postinstall": "node node_modules/electron/install.js"
   },
   "dependencies": {

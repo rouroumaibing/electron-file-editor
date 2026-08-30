@@ -23,6 +23,9 @@ pid/
 .DS_Store
 Thumbs.db
 
+# ── WorkBuddy 工具本地数据（memory / agent 状态，不入仓）──
+.workbuddy/
+
 # ── TypeScript 增量构建信息 ──
 *.tsbuildinfo
 
