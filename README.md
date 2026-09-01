@@ -19,6 +19,7 @@ A VSCode-style file browser & editor built with Electron — single-platform (ma
   - **Auto-save (opt-in)** — optional interval-based saving of dirty tabs, configured in Settings (persisted in `localStorage`).
   - **In-session undo / redo** — toolbar buttons wired to Monaco's per-model undo stack.
 - **Resizable layout** — drag the sidebar / editor splitter to any width (160 px minimum).
+- **Theme system** — dark / light dual themes (TRAE IDE–style palette); toggle from the toolbar or follow the OS `prefers-color-scheme`. The choice persists in `localStorage`.
 
 ## Screenshots
 
