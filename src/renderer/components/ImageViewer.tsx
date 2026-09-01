@@ -5,8 +5,9 @@
 import { useEffect, useState } from 'react';
 import { useFileAPI } from '../hooks/useFileAPI';
 import { styles } from '../styles';
+import type { ThemeMode } from '../theme';
 
-export function ImageViewer({ filePath }: { filePath: string }) {
+export function ImageViewer({ filePath, themeMode }: { filePath: string; themeMode: ThemeMode }) {
   const api = useFileAPI();
   const [dataUrl, setDataUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -31,7 +32,7 @@ export function ImageViewer({ filePath }: { filePath: string }) {
   if (error) return <div style={styles.errorBar}>{error}</div>;
   if (!dataUrl) return <div style={styles.hint}>加载图片…</div>;
   return (
-    <div style={{ flex: 1, overflow: 'auto', padding: 12, background: '#fff', minHeight: 0 }}>
+    <div style={{ flex: 1, overflow: 'auto', padding: 12, background: themeMode === 'dark' ? '#1e1e1e' : '#ffffff', minHeight: 0 }}>
       <img
         src={dataUrl}
         alt={filePath}

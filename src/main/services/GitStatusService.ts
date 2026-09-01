@@ -46,7 +46,9 @@ export class GitStatusService {
 
   private run(args: string[], cwd: string, timeoutMs: number): Promise<string> {
     return new Promise((resolve, reject) => {
-      execFile('git', args, { cwd, timeout: timeoutMs }, (err, stdout) => {
+      // maxBuffer 设大：含 node_modules 的仓库在 -uall --ignored 下 porcelain 输出常超 1MB
+      //（execFile 默认 1MB，超出抛 ERR_CHILD_PROCESS_STDIO_MAXBUFFER，导致 git 状态采集失败→文件树全绿）。
+      execFile('git', args, { cwd, timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 }, (err, stdout) => {
         if (err) return reject(err);
         resolve(stdout);
       });
@@ -67,7 +69,7 @@ export class GitStatusService {
     let stdout: string;
     try {
       stdout = await this.run(
-        ['status', '--porcelain=v1', '-uall', '--no-renames'],
+        ['status', '--porcelain=v1', '-uall', '--ignored', '--no-renames'],
         workspaceRoot,
         STATUS_TIMEOUT_MS,
       );
@@ -94,7 +96,7 @@ export class GitStatusService {
   // porcelain XY → 单字母状态码（§15.1 / §15.3）
   private mapCode(xy: string): GitStatusCode | null {
     if (xy === '??') return 'U'; // untracked
-    if (xy === '!!') return null; // ignored -> 跳过
+    if (xy === '!!') return 'I'; // ignored -> 单独状态（文件树置灰，对齐 TRAE IDE）
     if (xy === 'DD' || xy === 'AA' || xy[0] === 'U' || xy[1] === 'U') return 'C'; // unmerged/conflicted
     if (xy[0] === 'D' || xy[1] === 'D') return 'D';
     if (xy[0] === 'M' || xy[1] === 'M') return 'M';

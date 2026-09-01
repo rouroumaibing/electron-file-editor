@@ -18,6 +18,64 @@ import { useFileAPI } from '../hooks/useFileAPI';
 import { getModelMeta, getOrCreateModel, hasModel, setModelMeta } from '../modelRegistry';
 import type { Eol } from '@shared/types/fs';
 import { styles } from '../styles';
+import type { ThemeMode } from '../theme';
+
+// TRAE IDE 风格 Monaco 自定义主题（与 app 主题系统同步切换）。
+// 基于内置 vs-dark / vs，仅覆盖 editor.background 等与 app 配色对齐。
+function defineTraeThemes(monaco: typeof Monaco) {
+  monaco.editor.defineTheme('trae-dark', {
+    base: 'vs-dark',
+    inherit: true,
+    rules: [],
+    colors: {
+      'editor.background': '#1e1e1e',
+      'editorGutter.background': '#1e1e1e',
+      'editor.lineHighlightBackground': '#2a2d2e',
+      'editor.lineHighlightBorder': '#00000000',
+      'editorLineNumber.foreground': '#858585',
+      'editorLineNumber.activeForeground': '#cccccc',
+      'editorCursor.foreground': '#aeafad',
+      'editor.selectionBackground': '#264f78',
+      'editor.inactiveSelectionBackground': '#3a3d41',
+      'editorIndentGuide.background': '#404040',
+      'editorIndentGuide.activeBackground': '#707070',
+      'editorWidget.background': '#252526',
+      'editorWidget.border': '#454545',
+      'editorSuggestWidget.background': '#252526',
+      'editorSuggestWidget.border': '#454545',
+      'editorSuggestWidget.selectedBackground': '#094771',
+      'editorHoverWidget.background': '#252526',
+      'scrollbarSlider.background': '#79797966',
+      'scrollbarSlider.hoverBackground': '#646464b3',
+    },
+  });
+  monaco.editor.defineTheme('trae-light', {
+    base: 'vs',
+    inherit: true,
+    rules: [],
+    colors: {
+      'editor.background': '#ffffff',
+      'editorGutter.background': '#ffffff',
+      'editor.lineHighlightBackground': '#f0f0f0',
+      'editor.lineHighlightBorder': '#00000000',
+      'editorLineNumber.foreground': '#999999',
+      'editorLineNumber.activeForeground': '#333333',
+      'editorCursor.foreground': '#333333',
+      'editor.selectionBackground': '#add6ff',
+      'editor.inactiveSelectionBackground': '#e5ebf1',
+      'editorIndentGuide.background': '#e0e0e0',
+      'editorIndentGuide.activeBackground': '#b0b0b0',
+      'editorWidget.background': '#f6f6f6',
+      'editorWidget.border': '#dddddd',
+      'editorSuggestWidget.background': '#f6f6f6',
+      'editorSuggestWidget.border': '#dddddd',
+      'editorSuggestWidget.selectedBackground': '#e3f0ff',
+      'editorHoverWidget.background': '#f6f6f6',
+      'scrollbarSlider.background': '#c1c1c166',
+      'scrollbarSlider.hoverBackground': '#a8a8a8b3',
+    },
+  });
+}
 
 interface Props {
   filePath: string;
@@ -27,6 +85,8 @@ interface Props {
   onMeta?: (meta: { encoding: string; eol: Eol }) => void;
   // 保存成功回调（Cmd/Ctrl+S 或编辑器内保存触发；供底部"保存成功"反馈，§7.3 v2）
   onSaved?: () => void;
+  // 主题模式：驱动 Monaco 编辑器明暗切换（与 app 主题系统同步）
+  themeMode: ThemeMode;
 }
 
 // 暴露给工具栏"回退/前进"按钮的命令式句柄（§14 会话内撤销/重做）
@@ -36,7 +96,7 @@ export interface CodeEditorHandle {
 }
 
 export const CodeEditor = forwardRef<CodeEditorHandle, Props>(function CodeEditor(
-  { filePath, onDirtyChange, reloadSignal, onMeta, onSaved }: Props,
+  { filePath, onDirtyChange, reloadSignal, onMeta, onSaved, themeMode }: Props,
   ref,
 ) {
   const api = useFileAPI();
@@ -58,6 +118,11 @@ export const CodeEditor = forwardRef<CodeEditorHandle, Props>(function CodeEdito
     onDirtyChangeRef.current = onDirtyChange;
     onMetaRef.current = onMeta;
     onSavedRef.current = onSaved;
+  });
+  // themeMode 经 ref 读取，避免 init/切换 effect 随其值变化反复重跑
+  const themeModeRef = useRef(themeMode);
+  useEffect(() => {
+    themeModeRef.current = themeMode;
   });
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
@@ -83,9 +148,11 @@ export const CodeEditor = forwardRef<CodeEditorHandle, Props>(function CodeEdito
     loader.init().then((monaco) => {
       if (disposed || !containerRef.current) return;
       monacoRef.current = monaco;
+      defineTraeThemes(monaco);
+      const initialTheme = themeModeRef.current === 'dark' ? 'trae-dark' : 'trae-light';
       const ed = monaco.editor.create(containerRef.current, {
         automaticLayout: true,
-        theme: 'vs',
+        theme: initialTheme,
       });
       editorRef.current = ed;
       ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
@@ -101,6 +168,13 @@ export const CodeEditor = forwardRef<CodeEditorHandle, Props>(function CodeEdito
       editorRef.current = null;
     };
   }, []);
+
+  // 主题切换：同步 Monaco 编辑器明暗（与 app 主题系统联动）
+  useEffect(() => {
+    const ed = editorRef.current;
+    if (!ed) return;
+    ed.updateOptions({ theme: themeMode === 'dark' ? 'trae-dark' : 'trae-light' });
+  }, [themeMode, ready]);
 
   // 加载文件内容（切换文件 或 外部 reload 信号 触发）
   // 文档 §14：model 按 filePath 复用，切换标签时保留未保存编辑；

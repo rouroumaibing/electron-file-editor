@@ -57,4 +57,7 @@ contextBridge.exposeInMainWorld('fileAPI', {
     return () => ipcRenderer.removeListener('app:requestClose', wrapper);
   },
   confirmClose: () => ipcRenderer.send('app:confirmClose'),
+
+  // §主题：渲染层切换暗/亮后同步原生窗口外观（边框 / 标题栏随系统级 themeSource 变化）
+  setNativeTheme: (mode: 'dark' | 'light') => ipcRenderer.send('theme:apply', mode),
 });

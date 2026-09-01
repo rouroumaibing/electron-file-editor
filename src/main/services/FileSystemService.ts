@@ -238,7 +238,7 @@ export class FileSystemService {
       if (!stat.isDirectory()) return { ok: false, error: this.err('E_NOTDIR', 'not a directory') };
       const entries = await fs.readdir(dirPath, { withFileTypes: true });
       const nodes = entries
-        .filter((entry) => !entry.name.startsWith('.')) // MVP：过滤隐藏条目
+        // 不再过滤 . 开头的隐藏文件/文件夹（与 TRAE IDE 行为一致）
         .map((entry) => ({
           name: entry.name,
           path: path.join(dirPath, entry.name),

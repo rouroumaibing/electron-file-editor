@@ -31,7 +31,8 @@ import { SettingsModal } from './components/SettingsModal';
 import { disposeModel, getModel, getModelMeta } from './modelRegistry';
 import { loadSettings, saveSettings, loadSidebarWidth, saveSidebarWidth } from './settings';
 import type { AutoSaveSettings } from './settings';
-import { styles } from './styles';
+import { createStyles } from './styles';
+import { DARK_THEME, LIGHT_THEME, loadTheme, saveTheme, loadPanelPosition, savePanelPosition, type ThemeMode, type ThemeTokens } from './theme';
 
 interface OpenTab {
   path: string;
@@ -75,8 +76,8 @@ function isImage(p: string): boolean {
   return IMAGE_EXT.test(p);
 }
 
-// —— §15 Git 状态高亮：目录聚合优先级（C > D > M > A > U；R 同 M）——
-const GIT_PRIORITY: Record<GitStatusCode, number> = { C: 5, D: 4, M: 3, A: 2, U: 1, R: 3 };
+// —— §15 Git 状态高亮：目录聚合优先级（C > D > M > A > U；R 同 M；I 最低，被改动项覆盖）——
+const GIT_PRIORITY: Record<GitStatusCode, number> = { C: 5, D: 4, M: 3, A: 2, U: 1, R: 3, I: 0 };
 function betterGit(a: GitStatusCode, b: GitStatusCode): GitStatusCode {
   return GIT_PRIORITY[a] >= GIT_PRIORITY[b] ? a : b;
 }
@@ -112,6 +113,9 @@ export default function App() {
   const [openTabs, setOpenTabs] = useState<OpenTab[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null); // §3.3 选中态
+  // 新建目标目录：标题栏"＋/新建文件夹"按钮创建于此（null = 工作区根）。
+  // 选中文件夹 / 打开文件时同步更新，使新建落在用户当前所在的目录（对齐 TRAE IDE 行为）。
+  const [selectedDir, setSelectedDir] = useState<string | null>(null);
   // §8.2（改版）外部修改提示：external 修改 + dirty 时非阻塞提示（不拦截保存）。
   // 双按钮：重新加载外部版本（丢弃未保存改动） / 保留当前版本（确认继续编辑，提示消失）。
   const [externalNote, setExternalNote] = useState<string | null>(null);
@@ -150,11 +154,45 @@ export default function App() {
   const [dragOverDir, setDragOverDir] = useState<string | null>(null);
   // §3.6c 根落点悬停：树面板空白区域 = 工作区根（区别于 dragOverDir 的目录行落点）
   const [dragOverRoot, setDragOverRoot] = useState(false);
+  // —— 主题系统（暗色 / 亮色）——
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => loadTheme());
+  const tokens: ThemeTokens = themeMode === 'dark' ? DARK_THEME : LIGHT_THEME;
+  const s = createStyles(tokens); // 当前主题样式
+  const toggleTheme = useCallback(() => {
+    setThemeMode((prev) => {
+      const next = prev === 'dark' ? 'light' : 'dark';
+      saveTheme(next);
+      return next;
+    });
+  }, []);
+  // —— 面板位置置换（文件树左/右）——
+  const [panelPosition, setPanelPosition] = useState<'left' | 'right'>(() => loadPanelPosition());
+  const togglePanelPosition = useCallback(() => {
+    setPanelPosition((prev) => {
+      const next = prev === 'left' ? 'right' : 'left';
+      savePanelPosition(next);
+      return next;
+    });
+  }, []);
+  // —— 文件树分区折叠状态 ——
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const closeTabMenu = useCallback(() => setTabMenu(null), []);
 
   // §17 拖拽分栏：在 sidebar 与 editorArea 之间的竖向分隔条上 mousedown 后，
   // 监听全局 mousemove 更新宽度，mouseup 结束（结束态经 localStorage 持久化）。
   // 约束：最小 160px、右侧至少留 260px。
+  // 面板位置置换（panelPosition==='right'）时侧栏在右，宽度 = 视口宽 - clientX，
+  // 拖拽方向需镜像：向左拖 = 右侧文件树变大（与"左侧文件树"布局方向相反）。
+  const panelPositionRef = useRef(panelPosition);
+  useEffect(() => { panelPositionRef.current = panelPosition; }, [panelPosition]);
+
+  // §主题：切换暗/亮时同步原生窗口外观（边框 / 标题栏随系统级 themeSource 变化），
+  // 同时把 body/html 背景设为当前主题底色，避免原生边框与内容间露出白边。
+  useEffect(() => {
+    try { window.fileAPI.setNativeTheme(themeMode); } catch { /* preload 未就绪时静默 */ }
+    document.body.style.backgroundColor = tokens.bgApp;
+    document.documentElement.style.backgroundColor = tokens.bgApp;
+  }, [themeMode, tokens.bgApp]);
   const onSplitterDown = useCallback((e: ReactMouseEvent) => {
     e.preventDefault();
     resizingRef.current = true;
@@ -164,8 +202,10 @@ export default function App() {
     let latest = 0;
     const onMove = (ev: MouseEvent) => {
       if (!resizingRef.current) return;
-      latest = Math.min(Math.max(ev.clientX, 160), window.innerWidth - 260);
-      setSidebarWidth(latest);
+      const x = Math.min(Math.max(ev.clientX, 160), window.innerWidth - 260);
+      const w = panelPositionRef.current === 'right' ? window.innerWidth - x : x;
+      latest = w;
+      setSidebarWidth(w);
     };
     const onUp = () => {
       resizingRef.current = false;
@@ -384,6 +424,7 @@ export default function App() {
         setOpenTabs([]);
         setActivePath(null);
         setSelectedPath(null);
+        setSelectedDir(null); // 切换工作区：新建目标回到根
         setActiveMeta(null); // 切换工作区：清空编码信息
         setExternalNote(null); // 切换工作区：清空外部修改提示
         const nodes = await readDirectory(root);
@@ -415,6 +456,8 @@ export default function App() {
     );
     setActivePath(filePath);
     setSelectedPath(filePath); // §3.3 选中态
+    // 打开文件：新建目标同步到该文件所在目录（点上级"＋"即建在同目录）
+    setSelectedDir(parentOf(filePath) ?? workspaceRootRef.current);
     // §13 状态栏 meta：已打开过的文件直接从注册表恢复（同步、不依赖 CodeEditor 重跑）。
     // 不能无脑 setActiveMeta(null)——重复点击同一文件时 activePath 值不变（React bail out
     // 不重渲染，FilePreviewGate/CodeEditor 均不重挂载、加载 effect 不重跑），清空后无人
@@ -830,6 +873,7 @@ export default function App() {
   const toggleDir = useCallback(
     async (node: FileNode) => {
       setSelectedPath(node.path); // §3.3 选中态
+      setSelectedDir(node.path); // 点击目录：新建目标 = 该目录
       if (node.loadState === 'loaded') {
         // 收起：退订该目录监听（§9.4 生命周期）
         const id = watchMapRef.current.get(node.path);
@@ -956,9 +1000,125 @@ export default function App() {
     };
   }, []);
 
+  // —— 编辑区（提取为内部组件避免面板置换时重复代码）——
+  const EditorArea = () => (
+    <div style={s.editorArea}>
+      {activePath ? (
+        <>
+          <div style={s.tabBar}>
+            {openTabs.map((t) => (
+              <span
+                key={t.path}
+                style={{ ...s.tab, ...(t.path === activePath ? s.tabActive : {}) }}
+                onClick={() => setActivePath(t.path)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setTabMenu({
+                    x: Math.min(e.clientX, window.innerWidth - 150),
+                    y: Math.min(e.clientY, window.innerHeight - 170),
+                    anchor: t.path,
+                  });
+                }}
+              >
+                {t.path.split('/').pop()}
+                {t.isDirty && (
+                  <span
+                    title="未保存"
+                    style={{ width: 7, height: 7, borderRadius: '50%', background: tokens.textMuted, marginLeft: 6, flexShrink: 0 }}
+                  />
+                )}
+                <span
+                  title="关闭"
+                  style={{ ...s.tabClose, display: 'flex', alignItems: 'center', justifyContent: 'center', marginLeft: 4 }}
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    closeTab(t.path);
+                  }}
+                >
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+                    <path d="M3 3l6 6M9 3l-6 6" />
+                  </svg>
+                </span>
+              </span>
+            ))}
+            <div style={s.tabBarActions}>
+              <button
+                style={{ ...s.tabBarBtn, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                title="批量关闭页签"
+                aria-label="批量关闭页签"
+                onClick={(e) =>
+                  setTabMenu({
+                    x: Math.max(4, e.clientX - 120),
+                    y: Math.min(e.clientY + 22, window.innerHeight - 170),
+                    anchor: null,
+                  })
+                }
+              >
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M2.5 4.5l3.5 3.5 3.5-3.5" />
+                </svg>
+              </button>
+            </div>
+            {tabMenu && (
+              <>
+                <div
+                  style={s.menuBackdrop}
+                  onClick={closeTabMenu}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    closeTabMenu();
+                  }}
+                />
+                <div style={{ ...s.ctxMenu, left: tabMenu.x, top: tabMenu.y }}>
+                  {buildTabMenuItems(tabMenu.anchor).map((it) => (
+                    <button
+                      key={it.label}
+                      style={{ ...s.ctxItem, ...(it.disabled ? { color: '#bbb', cursor: 'default' } : {}) }}
+                      disabled={it.disabled}
+                      onClick={() => {
+                        it.onClick();
+                        closeTabMenu();
+                      }}
+                    >
+                      {it.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+          {isImage(activePath) ? (
+            <ImageViewer key={activePath} filePath={activePath} themeMode={themeMode} />
+          ) : (
+            <FilePreviewGate
+              key={activePath}
+              filePath={activePath}
+              themeMode={themeMode}
+              renderEditor={(p) => (
+                <CodeEditor
+                  key={p}
+                  ref={editorRef}
+                  filePath={p}
+                  onDirtyChange={(dirty) => setDirty(p, dirty)}
+                  reloadSignal={reloadSignal}
+                  onMeta={setActiveMeta}
+                  onSaved={() => showSaveFeedback('保存成功')}
+                  themeMode={themeMode}
+                />
+              )}
+            />
+          )}
+        </>
+      ) : (
+        <div style={s.hint}>选择一个文件开始编辑</div>
+      )}
+    </div>
+  );
+
   return (
-    <div style={styles.app}>
-      <div style={styles.toolbar}>
+    <div style={s.app}>
+      <div style={s.toolbar}>
         <button onClick={openFolder}>打开文件夹</button>
         <button onClick={saveActive} disabled={!activePath}>
           保存
@@ -969,13 +1129,69 @@ export default function App() {
         <button onClick={() => editorRef.current?.redo()} disabled={!activePath} title="重做 (Ctrl+Y)">
           前进
         </button>
+        {/* 分隔符 */}
+        <span style={{ width: 1, height: 16, background: String(s.border), display: 'inline-block', margin: '0 4px' }} />
+        {/* 主题切换按钮 */}
+        <button
+          title={themeMode === 'dark' ? '切换到亮色主题' : '切换到暗色主题'}
+          onClick={toggleTheme}
+          style={{
+            border: '1px solid transparent', background: 'transparent', cursor: 'pointer',
+            fontSize: 15, lineHeight: 1, color: String(s.textSecondary), padding: '3px 6px',
+            borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            width: 28, height: 28,
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = tokens.bgRowHover)}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+        >
+          {themeMode === 'dark' ? (
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round">
+              <circle cx="8" cy="8" r="4" />
+              <path d="M8 1v2M8 13v2M13 8h2M1 8h2M11.5 11.5l1.4 1.4M3.1 3.1l1.4 1.4M11.5 4.5l1.4-1.4M3.1 12.9l1.4-1.4" />
+            </svg>
+          ) : (
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round">
+              <path d="M14 9.7A6 6 0 1110.3 2.3" />
+              <path d="M14 3v4h-4" />
+            </svg>
+          )}
+        </button>
+        {/* 面板位置置换按钮 */}
+        <button
+          title={panelPosition === 'left' ? '移动文件树到右侧' : '移动文件树到左侧'}
+          onClick={togglePanelPosition}
+          style={{
+            border: '1px solid transparent', background: 'transparent', cursor: 'pointer',
+            fontSize: 15, lineHeight: 1, color: String(s.textSecondary), padding: '3px 6px',
+            borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            width: 28, height: 28,
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = tokens.bgRowHover)}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+            {panelPosition === 'left' ? (
+              <>
+                <rect x="1.5" y="2.5" width="5" height="11" rx="1" />
+                <rect x="9.5" y="2.5" width="5" height="11" rx="1" />
+                <path d="M8 6v4M6 8h4" />
+              </>
+            ) : (
+              <>
+                <rect x="9.5" y="2.5" width="5" height="11" rx="1" />
+                <rect x="1.5" y="2.5" width="5" height="11" rx="1" />
+                <path d="M8 10V6M10 8H6" />
+              </>
+            )}
+          </svg>
+        </button>
         <button onClick={() => setSettingsOpen(true)}>设置</button>
-        <span style={styles.root}>{workspaceRoot ?? '未选择工作区'}</span>
-        {status && <span style={styles.status}>{status}</span>}
+        <span style={s.root}>{workspaceRoot ?? '未选择工作区'}</span>
+        {status && <span style={s.status}>{status}</span>}
       </div>
 
       {externalNote && (
-        <div style={styles.banner}>
+        <div style={s.banner}>
           <span>
             文件 <code>{externalNote}</code> 在外部被修改：重新加载将丢弃当前未保存改动，保留则继续编辑当前版本。
           </span>
@@ -984,160 +1200,119 @@ export default function App() {
         </div>
       )}
 
-      <div style={styles.body}>
-        <div style={{ ...styles.sidebar, width: sidebarWidth }}>
-          {workspaceRoot ? (
-            <FileTree
-              nodes={tree}
-              onToggleDir={toggleDir}
-              onOpenFile={openFile}
-              onNewFile={(dir) => requestCreate(dir || null, 'file')}
-              onNewFolder={(dir) => requestCreate(dir || null, 'directory')}
-              onRename={requestRename}
-              onDelete={requestDelete}
-              onCopyPath={onCopyPath}
-              selectedPath={selectedPath}
-              gitFileMap={gitFileMap}
-              gitDirMap={gitDirMap}
-              onMoveDrop={handleMoveNode}
-              dragSource={dragSource}
-              dragOverDir={dragOverDir}
-              onDragStartNode={handleDragStartNode}
-              onDragEndNode={handleDragEndNode}
-              onDragOverDir={handleDragOverDir}
-              onMoveToRoot={handleMoveToRoot}
-              dragOverRoot={dragOverRoot}
-              onDragOverRoot={handleDragOverRoot}
-            />
-          ) : (
-            <div style={styles.hint}>点击“打开文件夹”选择一个目录</div>
-          )}
-        </div>
-
-        <div
-          style={{ ...styles.splitter, ...(isResizing ? styles.splitterActive : {}) }}
-          onMouseDown={onSplitterDown}
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="拖拽调整侧栏宽度"
-        />
-
-        <div style={styles.editorArea}>
-          {activePath ? (
-            <>
-              <div style={styles.tabBar}>
-                {openTabs.map((t) => (
-                  <span
-                    key={t.path}
-                    style={{ ...styles.tab, ...(t.path === activePath ? styles.tabActive : {}) }}
-                    onClick={() => setActivePath(t.path)}
-                    onContextMenu={(e) => {
-                      // tab 右键菜单：关闭 / 关闭左侧全部 / 关闭右侧全部 / 关闭其他 / 关闭全部
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setTabMenu({
-                        x: Math.min(e.clientX, window.innerWidth - 150),
-                        y: Math.min(e.clientY, window.innerHeight - 170),
-                        anchor: t.path,
-                      });
-                    }}
-                  >
-                    {t.path.split('/').pop()}
-                    {t.isDirty ? ' •' : ''}
-                    <span
-                      style={styles.tabClose}
-                      onClick={(ev) => {
-                        ev.stopPropagation();
-                        closeTab(t.path);
-                      }}
-                    >
-                      ×
-                    </span>
-                  </span>
-                ))}
-                {/* 批量关闭页签：右侧常驻 ▾ 菜单（sticky 防横向滚动时被挤出） */}
-                <div style={styles.tabBarActions}>
-                  <button
-                    style={styles.tabBarBtn}
-                    title="批量关闭页签（关闭左侧全部 / 关闭右侧全部 / 关闭全部）"
-                    aria-label="批量关闭页签"
-                    onClick={(e) =>
-                      setTabMenu({
-                        x: Math.max(4, e.clientX - 120),
-                        y: Math.min(e.clientY + 22, window.innerHeight - 170),
-                        anchor: null, // 锚点 = 活动 tab
-                      })
-                    }
-                  >
-                    ▾
-                  </button>
-                </div>
-                {tabMenu && (
-                  <>
-                    <div
-                      style={styles.menuBackdrop}
-                      onClick={closeTabMenu}
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        closeTabMenu();
-                      }}
-                    />
-                    <div style={{ ...styles.ctxMenu, left: tabMenu.x, top: tabMenu.y }}>
-                      {buildTabMenuItems(tabMenu.anchor).map((it) => (
-                        <button
-                          key={it.label}
-                          style={{ ...styles.ctxItem, ...(it.disabled ? { color: '#bbb', cursor: 'default' } : {}) }}
-                          disabled={it.disabled}
-                          onClick={() => {
-                            it.onClick();
-                            closeTabMenu();
-                          }}
-                        >
-                          {it.label}
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                )}
-              </div>
-              {isImage(activePath) ? (
-                // key={activePath}：切换图片时重挂载以重置加载状态（替代 effect 内同步 setState，
-                // 符合 react-hooks/set-state-in-effect；ImageViewer 为纯展示组件，重挂载零副作用）
-                <ImageViewer key={activePath} filePath={activePath} />
-              ) : (
-                // §13 预览路由门：pdf/docx 等二进制文件在此分流到"暂不支持浏览"提示页，
-                // 不再落入 Monaco 底部红字错误条。
-                // key={activePath}：切文件即重挂载，FilePreviewGate 的 checking 态由
-                // 初始 state 承担（不再 effect 内同步 setState，杜绝渲染循环；CodeEditor
-                // 自身已有 key={p} 会重挂载，Monaco model 复用走 modelRegistry 不受影响）
-                <FilePreviewGate
-                  key={activePath}
-                  filePath={activePath}
-                  renderEditor={(p) => (
-                    <CodeEditor
-                      key={p}
-                      ref={editorRef}
-                      filePath={p}
-                      onDirtyChange={(dirty) => setDirty(p, dirty)}
-                      reloadSignal={reloadSignal}
-                      onMeta={setActiveMeta}
-                      onSaved={() => showSaveFeedback('保存成功')}
-                    />
-                  )}
+      <div style={s.body}>
+        {/* 面板位置置换：panelPosition === 'right' 时编辑区在前，文件树在后 */}
+        {panelPosition === 'left' ? (
+          <>
+            {/* 左侧：文件树 */}
+            <div style={{ ...s.sidebar, width: sidebarWidth }}>
+              {workspaceRoot ? (
+                <FileTree
+                  nodes={tree}
+                  onToggleDir={toggleDir}
+                  onOpenFile={openFile}
+                  onNewFile={(dir) => requestCreate(dir || null, 'file')}
+                  onNewFolder={(dir) => requestCreate(dir || null, 'directory')}
+                  creationDir={selectedDir ?? ''}
+                  onRename={requestRename}
+                  onDelete={requestDelete}
+                  onCopyPath={onCopyPath}
+                  selectedPath={selectedPath}
+                  gitFileMap={gitFileMap}
+                  gitDirMap={gitDirMap}
+                  onMoveDrop={handleMoveNode}
+                  dragSource={dragSource}
+                  dragOverDir={dragOverDir}
+                  onDragStartNode={handleDragStartNode}
+                  onDragEndNode={handleDragEndNode}
+                  onDragOverDir={handleDragOverDir}
+                  onMoveToRoot={handleMoveToRoot}
+                  dragOverRoot={dragOverRoot}
+                  onDragOverRoot={handleDragOverRoot}
+                  theme={tokens}
+                  collapsed={sidebarCollapsed}
+                  onToggleCollapse={() => setSidebarCollapsed((c) => !c)}
+                  onRefresh={() => void reloadTree()}
                 />
+              ) : (
+                <div style={s.hint}>点击"打开文件夹"选择一个目录</div>
               )}
-            </>
-          ) : (
-            <div style={styles.hint}>选择一个文件开始编辑</div>
-          )}
-        </div>
+            </div>
+
+            {/* 分隔条 */}
+            <div
+              style={{ ...s.splitter, ...(isResizing ? s.splitterActive : {}) }}
+              onMouseDown={onSplitterDown}
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="拖拽调整侧栏宽度"
+            />
+
+            {/* 右侧：编辑区 */}
+            <EditorArea />
+          </>
+        ) : (
+          <>
+            {/* 左侧：编辑区 */}
+            <EditorArea />
+
+            {/* 分隔条（右侧面板时 border-left 替代 border-right） */}
+            <div
+              style={{
+                ...s.splitter,
+                borderRight: 'none',
+                borderLeft: `1px solid ${tokens.border}`,
+                ...(isResizing ? s.splitterActive : {}),
+              }}
+              onMouseDown={onSplitterDown}
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="拖拽调整侧栏宽度"
+            />
+
+            {/* 右侧：文件树 */}
+            <div style={{ ...s.sidebar, width: sidebarWidth, borderRight: 'none', borderLeft: `1px solid ${tokens.border}` }}>
+              {workspaceRoot ? (
+                <FileTree
+                  nodes={tree}
+                  onToggleDir={toggleDir}
+                  onOpenFile={openFile}
+                  onNewFile={(dir) => requestCreate(dir || null, 'file')}
+                  onNewFolder={(dir) => requestCreate(dir || null, 'directory')}
+                  creationDir={selectedDir ?? ''}
+                  onRename={requestRename}
+                  onDelete={requestDelete}
+                  onCopyPath={onCopyPath}
+                  selectedPath={selectedPath}
+                  gitFileMap={gitFileMap}
+                  gitDirMap={gitDirMap}
+                  onMoveDrop={handleMoveNode}
+                  dragSource={dragSource}
+                  dragOverDir={dragOverDir}
+                  onDragStartNode={handleDragStartNode}
+                  onDragEndNode={handleDragEndNode}
+                  onDragOverDir={handleDragOverDir}
+                  onMoveToRoot={handleMoveToRoot}
+                  dragOverRoot={dragOverRoot}
+                  onDragOverRoot={handleDragOverRoot}
+                  theme={tokens}
+                  collapsed={sidebarCollapsed}
+                  onToggleCollapse={() => setSidebarCollapsed((c) => !c)}
+                  onRefresh={() => void reloadTree()}
+                />
+              ) : (
+                <div style={s.hint}>点击"打开文件夹"选择一个目录</div>
+              )}
+            </div>
+          </>
+        )}
       </div>
 
       {/* §13 底部状态栏：左 = 当前文件/工作区，中 = 保存反馈，右 = 编码 · 换行符（UTF-8 无 BOM 约定） */}
-      <div style={styles.statusBar}>
-        <span style={styles.statusBarPath}>{activePath ?? (workspaceRoot ?? '未打开工作区')}</span>
-        {saveFeedback && <span style={styles.statusBarFeedback}>{saveFeedback.text}</span>}
-        <span style={styles.statusBarMeta}>
+      <div style={s.statusBar}>
+        <span style={s.statusBarPath}>{activePath ?? (workspaceRoot ?? '未打开工作区')}</span>
+        {saveFeedback && <span style={s.statusBarFeedback}>{saveFeedback.text}</span>}
+        <span style={s.statusBarMeta}>
           {/* 图片无编码/换行符概念：无条件不显示，避免残留上一个文本文件的脏 meta（tab 切换不经过 CodeEditor） */}
           {!activePath || isImage(activePath)
             ? ''
@@ -1157,6 +1332,7 @@ export default function App() {
             setModal(null);
           }}
           onCancel={() => setModal(null)}
+          theme={tokens}
         />
       )}
       {modal?.kind === 'confirm' && (
@@ -1169,6 +1345,7 @@ export default function App() {
             setModal(null);
           }}
           onCancel={() => setModal(null)}
+          theme={tokens}
         />
       )}
 
@@ -1185,6 +1362,7 @@ export default function App() {
             void api.confirmClose();
           }}
           onCancel={() => setCloseModal(null)}
+          theme={tokens}
         />
       )}
 
@@ -1196,14 +1374,15 @@ export default function App() {
             saveSettings(next);
           }}
           onClose={() => setSettingsOpen(false)}
+          theme={tokens}
         />
       )}
 
       {/* §3.6b 拖拽打开：系统文件/文件夹悬停窗口时的全局遮罩（pointerEvents none，
           不拦截事件；drop 仍由 window capture 监听处理） */}
       {dragActive && (
-        <div style={styles.dropOverlay}>
-          <div style={styles.dropOverlayBox}>松开以打开文件 / 文件夹</div>
+        <div style={s.dropOverlay}>
+          <div style={s.dropOverlayBox}>松开以打开文件 / 文件夹</div>
         </div>
       )}
     </div>

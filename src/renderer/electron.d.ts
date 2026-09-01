@@ -29,6 +29,8 @@ declare global {
       onRequestClose: (cb: () => void) => () => void;
       // 渲染层决策后放行真正关闭
       confirmClose: () => void;
+      // 主题切换后同步原生窗口外观（边框 / 标题栏随系统级 themeSource 变化）
+      setNativeTheme: (mode: 'dark' | 'light') => void;
     };
   }
 }

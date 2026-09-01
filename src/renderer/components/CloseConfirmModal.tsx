@@ -6,31 +6,34 @@
 //   - 不保存：直接放行关闭（丢弃未保存内容，符合"关闭即不管恢复"的产品决策）
 //   - 取消：中止关闭，窗口保持打开
 
-import { styles } from '../styles';
+import { createStyles, LIGHT_THEME } from '../styles';
+import type { ThemeTokens } from '../theme';
 
 interface Props {
   dirtyCount: number;
   onSave: () => void;
   onDiscard: () => void;
   onCancel: () => void;
+  theme?: ThemeTokens;
 }
 
-export function CloseConfirmModal({ dirtyCount, onSave, onDiscard, onCancel }: Props) {
+export function CloseConfirmModal({ dirtyCount, onSave, onDiscard, onCancel, theme }: Props) {
+  const s = createStyles(theme ?? LIGHT_THEME);
   return (
-    <div style={styles.modalBackdrop} onClick={onCancel}>
-      <div style={styles.modalBox} onClick={(e) => e.stopPropagation()}>
-        <div style={styles.modalTitle}>有未保存的更改</div>
-        <div style={styles.modalMsg}>
+    <div style={s.modalBackdrop} onClick={onCancel}>
+      <div style={s.modalBox} onClick={(e) => e.stopPropagation()}>
+        <div style={s.modalTitle}>有未保存的更改</div>
+        <div style={s.modalMsg}>
           当前有 {dirtyCount} 个文件未保存。关闭后将无法恢复这些更改。
         </div>
-        <div style={styles.modalActions}>
-          <button style={styles.modalBtn} onClick={onCancel}>
+        <div style={s.modalActions}>
+          <button style={s.modalBtn} onClick={onCancel}>
             取消
           </button>
-          <button style={styles.modalBtn} onClick={onDiscard}>
+          <button style={s.modalBtn} onClick={onDiscard}>
             不保存
           </button>
-          <button style={styles.modalBtnPrimary} onClick={onSave}>
+          <button style={s.modalBtnPrimary} onClick={onSave}>
             保存
           </button>
         </div>

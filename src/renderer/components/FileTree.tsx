@@ -1,29 +1,116 @@
 // src/renderer/components/FileTree.tsx
-// 文件树（递归、懒加载）。每个目录节点按需展开，展开时由上层 readDirectory 填充 children。
-// 右键上下文菜单（Step 5 / §3.1）：节点右键 -> 目录可新建文件/文件夹（新建于自身）、文件可新建于父目录、
-// 所有节点可重命名/删除/复制路径；空白区域右键 -> 新建于工作区根（空工作区 / 树外空白处的新建入口）。
-// §3.6c 树内拖拽移动：所有行可拖（draggable + 自定义 MIME 传源路径）；仅目录行可作为落点
-// （dragover/drop），拖入自身或自身后代为非法目标（dropEffect none，不触发 drop）。
-import { useState } from 'react';
+//
+// 文件树（递归、懒加载）—— TRAE IDE 风格。
+// 特性：
+//   - 分区标题栏（"文件"）+ 工具栏按钮（新建文件/文件夹、刷新、折叠）
+//   - 文件类型图标 + 颜色编码名称
+//   - Git 状态徽标靠右显示（M/A/U/D/C）
+//   - 目录展开/收起箭头 + 文件夹图标
+//   - 右键上下文菜单
+//   - §3.6c 树内拖拽移动
+import { useState, useCallback } from 'react';
 import type { DragEvent } from 'react';
 import type { FileNode } from '@shared/types/fs';
 import type { GitStatusCode } from '@shared/types/git';
-import { styles } from '../styles';
+import type { ThemeTokens } from '../theme';
+import { getFileColorToken } from '../theme';
 
-// §3.6c 拖拽传输的自定义 MIME：内部节点拖拽专用（与系统文件拖入的 Files 类型互不干扰，
-// 窗口级 §3.6b 监听仅拦截 Files 类型，会自然放行本类型拖拽）
 const TREE_DND_MIME = 'application/x-file-editor-path';
 
-// §15 Git 状态高亮：颜色（light 主题基准）+ 单字母徽标
-const GIT_COLORS: Record<GitStatusCode, string> = {
-  M: '#e2c08d', // 黄
-  A: '#73c991', // 绿
-  U: '#73c991', // 绿（未跟踪）
-  D: '#f14c4c', // 红
-  C: '#f14c4c', // 红（冲突）
-  R: '#e2c08d', // 黄
-};
-const GIT_BADGE: Record<GitStatusCode, string> = { M: 'M', A: 'A', U: 'U', D: 'D', C: '!', R: 'R' };
+// —— 文件类型图标（SVG inline，TRAE 风格）——
+
+function FolderIcon({ open }: { open: boolean }) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0, marginRight: 4 }}>
+      <path
+        d={open
+          ? "M1.5 3.5h4.1l1.4 1.5H14.5V13h-13V3.5z"
+          : "M1.5 3.5h4.1l1.4-1.5H14.5v11h-13V3.5z"}
+        fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function FileIcon({ name }: { name: string }) {
+  const ext = name.slice(name.lastIndexOf('.')).toLowerCase();
+  // 根据扩展名选择不同图标
+  if (['.md', '.mdx', '.markdown'].includes(ext)) {
+    return (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0, marginRight: 4 }}>
+        <rect x="2.5" y="1.5" width="11" height="13" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1"/>
+        <line x1="5" y1="5.5" x2="11" y2="5.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round"/>
+        <line x1="5" y1="8" x2="11" y2="8" stroke="currentColor" strokeWidth="1" strokeLinecap="round"/>
+        <line x1="5" y1="10.5" x2="9" y2="10.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round"/>
+      </svg>
+    );
+  }
+  if (['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'].includes(ext)) {
+    return (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0, marginRight: 4 }}>
+        <rect x="3" y="1.5" width="10" height="13" rx="1" fill="none" stroke="currentColor" strokeWidth="1"/>
+        <text x="8" y="10.5" textAnchor="middle" fontSize="6.5" fill="currentColor" fontWeight="bold">{ext.includes('ts') ? 'TS' : 'JS'}</text>
+      </svg>
+    );
+  }
+  if (['.json', '.yml', '.yaml'].includes(ext)) {
+    return (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0, marginRight: 4 }}>
+        <rect x="2.5" y="1.5" width="11" height="13" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1"/>
+        <text x="8" y="10" textAnchor="middle" fontSize="5" fill="currentColor" fontWeight="bold">{ext === '.json' ? '{}' : '<>'}</text>
+      </svg>
+    );
+  }
+  if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico'].includes(ext)) {
+    return (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0, marginRight: 4 }}>
+        <rect x="2" y="2.5" width="12" height="10" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1"/>
+        <circle cx="5.5" cy="6" r="1.5" fill="currentColor" opacity="0.5"/>
+        <path d="M2.5 11l3-3 2.5 2.5L11 7l2.5 4.5V12a1 1 0 01-1 1h-10a1 1 0 01-1-1v-.5z" fill="currentColor" opacity="0.25"/>
+      </svg>
+    );
+  }
+  // 默认文件图标
+  const lower = name.toLowerCase();
+  if (lower === 'license' || lower === 'licence') {
+    return (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0, marginRight: 4 }}>
+        <path d="M7.5 1.5L2 5v8.5A1.5 1.5 0 003.5 15h9a1.5 1.5 0 001.5-1.5V5L8.5 1.5h-1z" fill="none" stroke="currentColor" strokeWidth="1" strokeLinejoin="round"/>
+        <path d="M7.5 1.5V5.5H2" fill="none" stroke="currentColor" strokeWidth="1" strokeLinejoin="round"/>
+        <circle cx="8" cy="9" r="1.5" fill="none" stroke="currentColor" strokeWidth="1"/>
+      </svg>
+    );
+  }
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0, marginRight: 4 }}>
+      <path d="M3 2.5h7l3 3v8a1 1 0 01-1 1H3a1 1 0 01-1-1v-10a1 1 0 011-1z" fill="none" stroke="currentColor" strokeWidth="1" strokeLinejoin="round"/>
+      <path d="M10 2.5V5.5h3" fill="none" stroke="currentColor" strokeWidth="1" strokeLinejoin="round"/>
+    </svg>
+  );
+}
+
+// —— 展开/收起箭头 ——
+function ChevronIcon({ expanded }: { expanded: boolean }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style={{ flexShrink: 0, transition: 'transform 0.15s', transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>
+      <path d="M5 3l4 4-4 4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+    </svg>
+  );
+}
+
+// —— Git 状态徽标颜色映射 ——
+function gitBadgeColor(code: GitStatusCode, t: ThemeTokens): string {
+  switch (code) {
+    case 'M': case 'R': return t.gitModified;
+    case 'A': return t.gitAdded;
+    case 'U': return t.gitUntracked;
+    case 'D': return t.gitDeleted;
+    case 'C': return t.gitConflict;
+    case 'I': return t.textMuted; // ignored -> 灰
+  }
+}
+
+const GIT_BADGE_LABEL: Record<GitStatusCode, string> = { M: 'M', A: 'A', U: 'U', D: 'D', C: '!', R: 'R', I: 'I' };
 
 interface Props {
   nodes: FileNode[];
@@ -31,28 +118,33 @@ interface Props {
   onOpenFile: (path: string) => void;
   onNewFile: (dirPath: string) => void;
   onNewFolder: (dirPath: string) => void;
+  // 标题栏"＋/新建文件夹"的目标目录（selectedDir；'' = 工作区根），与右键菜单的
+  // 局部 targetDir 区分：右键固定作用于被右键节点，标题栏作用于当前选中目录。
+  creationDir: string;
   onRename: (node: FileNode) => void;
   onDelete: (node: FileNode) => void;
   onCopyPath: (node: FileNode) => void;
-  selectedPath: string | null; // §3.3 选中态高亮
-  gitFileMap: Map<string, GitStatusCode>; // §15 文件精确映射
-  gitDirMap: Map<string, GitStatusCode>; // §15 目录聚合映射
-  // §3.6c 拖拽移动：落点回调 + 拖拽状态（源路径 / 悬停目标，由 App 统一持有）
+  selectedPath: string | null;
+  gitFileMap: Map<string, GitStatusCode>;
+  gitDirMap: Map<string, GitStatusCode>;
   onMoveDrop: (sourcePath: string, targetDirPath: string) => void;
   dragSource: string | null;
   dragOverDir: string | null;
   onDragStartNode: (path: string) => void;
   onDragEndNode: () => void;
   onDragOverDir: (path: string | null) => void;
-  // §3.6c 根落点：树面板空白区域 = 工作区根（与"空白右键新建于根"同语义）
   onMoveToRoot: (sourcePath: string) => void;
-  dragOverRoot: boolean; // 空白区域悬停高亮
+  dragOverRoot: boolean;
   onDragOverRoot: (active: boolean) => void;
   depth?: number;
+  theme: ThemeTokens;
+  collapsed?: boolean;           // 分区是否整体折叠
+  onToggleCollapse?: () => void; // 切换分区折叠
+  onRefresh?: () => void;         // 刷新文件树
 }
 
 interface MenuState {
-  node: FileNode | null; // null = 空白区域右键，目标为工作区根
+  node: FileNode | null;
   x: number;
   y: number;
 }
@@ -63,6 +155,7 @@ export function FileTree({
   onOpenFile,
   onNewFile,
   onNewFolder,
+  creationDir,
   onRename,
   onDelete,
   onCopyPath,
@@ -79,36 +172,31 @@ export function FileTree({
   dragOverRoot,
   onDragOverRoot,
   depth = 0,
+  theme: t,
+  collapsed = false,
+  onToggleCollapse,
+  onRefresh,
 }: Props) {
   const [menu, setMenu] = useState<MenuState | null>(null);
-
   const closeMenu = () => setMenu(null);
 
-  // §3.6c 判断目标目录是否可接收拖拽：非自身、非自身后代（拖目录进自己的子树会无限递归）
   const canDropInto = (targetPath: string, source: string | null): boolean =>
     Boolean(source) && source !== targetPath && !targetPath.startsWith(source + '/');
 
-  // §3.6c 行拖拽事件（React 合成 DragEvent）
   const handleRowDragStart = (node: FileNode) => (e: DragEvent<HTMLDivElement>) => {
-    // setData 必须有值，否则 Chromium 不启动拖拽
     e.dataTransfer.setData(TREE_DND_MIME, node.path);
     e.dataTransfer.effectAllowed = 'move';
     onDragStartNode(node.path);
   };
 
   const handleDirDragOver = (node: FileNode) => (e: DragEvent<HTMLDivElement>) => {
-    if (!canDropInto(node.path, dragSource)) {
-      e.dataTransfer.dropEffect = 'none';
-      return;
-    }
-    // 必须 preventDefault 才能成为 drop 目标
+    if (!canDropInto(node.path, dragSource)) { e.dataTransfer.dropEffect = 'none'; return; }
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     onDragOverDir(node.path);
   };
 
   const handleDirDragLeave = (node: FileNode) => (e: DragEvent<HTMLDivElement>) => {
-    // 仅在真正离开行时清除高亮：relatedTarget 仍在行内（拖过子行）则保留
     const next = e.relatedTarget as Node | null;
     if (dragOverDir === node.path && (!next || !e.currentTarget.contains(next))) {
       onDragOverDir(null);
@@ -117,31 +205,23 @@ export function FileTree({
 
   const handleDirDrop = (node: FileNode) => (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
-    e.stopPropagation(); // 不冒泡到外层容器/其他处理器（窗口级监听只认 Files 类型，本就放行）
+    e.stopPropagation();
     const source = e.dataTransfer.getData(TREE_DND_MIME);
     if (source && canDropInto(node.path, source)) onMoveDrop(source, node.path);
   };
 
-  // §3.6c 树面板空白区域 = 工作区根落点：拖到任何空白处（非行元素）即"移动到根目录"。
-  // 仅根层容器挂载（depth===0），子层级空白的事件冒泡到根容器统一判定；
-  // 落在行上则让位——目录行自行处理（高亮/落点），文件行无效（不 preventDefault）。
   const isTreeRow = (t: EventTarget | null): boolean =>
     t instanceof HTMLElement && Boolean(t.closest('[data-tree-row]'));
 
   const handlePanelDragOver = (e: DragEvent<HTMLDivElement>) => {
-    if (!dragSource) return; // 非内部节点拖拽（外部 Files 拖入由窗口级 §3.6b 处理）
-    if (isTreeRow(e.target)) {
-      onDragOverRoot(false); // 落在行上：根高亮让位（目录行会自己置 dragOverDir 高亮）
-      return;
-    }
+    if (!dragSource) return;
+    if (isTreeRow(e.target)) { onDragOverRoot(false); return; }
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     onDragOverRoot(true);
   };
 
   const handlePanelDragLeave = (e: DragEvent<HTMLDivElement>) => {
-    // HTML5 DnD 中 dragleave 的 relatedTarget 多为 null，不能依赖它判断是否离开容器；
-    // 改用鼠标坐标：仍在容器矩形内则保留高亮，拖出边界（进入编辑区/窗口外）才清除
     const rect = e.currentTarget.getBoundingClientRect();
     const inside =
       e.clientX >= rect.left && e.clientX <= rect.right &&
@@ -150,7 +230,7 @@ export function FileTree({
   };
 
   const handlePanelDrop = (e: DragEvent<HTMLDivElement>) => {
-    if (!dragSource || isTreeRow(e.target)) return; // 行上的 drop 由目录行处理（已 stopPropagation）
+    if (!dragSource || isTreeRow(e.target)) return;
     e.preventDefault();
     e.stopPropagation();
     onDragOverRoot(false);
@@ -158,131 +238,309 @@ export function FileTree({
     if (source) onMoveToRoot(source);
   };
 
+  // 行悬停高亮状态（用于工具栏按钮 hover 效果）
+  const [hoveredRow, setHoveredRow] = useState<string | null>(null);
+
+  // 渲染单行内容（图标 + 名称 + Git 徽标）
+  const renderRowContent = useCallback((node: FileNode) => {
+    const code = node.type === 'directory' ? gitDirMap.get(node.path) : gitFileMap.get(node.path);
+    const colorKey = node.type === 'directory' ? 'folderColor' : getFileColorToken(node.name);
+    // §TRAE-对齐：被 .gitignore 忽略的项（'I'）置灰，不再用文件类型彩色
+    const nameColor = code === 'I' ? t.textMuted : t[colorKey];
+
+    return (
+      <span style={{ display: 'flex', alignItems: 'center', gap: 2, flex: 1, minWidth: 0, color: code === 'I' ? t.textMuted : undefined }}>
+        {/* 展开/收起箭头（仅目录） */}
+        {node.type === 'directory' && (
+          <ChevronIcon expanded={!!node.expanded} />
+        )}
+        {/* 文件类型占位（非目录，保持对齐） */}
+        {node.type !== 'directory' && <span style={{ width: 14, flexShrink: 0 }} />}
+        {/* 图标 */}
+        {node.type === 'directory'
+          ? <FolderIcon open={!!node.expanded} />
+          : <FileIcon name={node.name} />
+        }
+        {/* 名称 */}
+        <span style={{
+          color: nameColor,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}>
+          {node.name}
+        </span>
+      </span>
+    );
+  }, [gitFileMap, gitDirMap, t]);
+
+  // 渲染 Git 状态徽标（行右侧）
+  const renderGitBadge = useCallback((node: FileNode) => {
+    const code = node.type === 'directory' ? gitDirMap.get(node.path) : gitFileMap.get(node.path);
+    if (!code) {
+      // 目录无 git 变更时：显示绿色小圆点（TRAE 风格）
+      if (node.type === 'directory') {
+        return (
+          <span style={{
+            width: 8, height: 8, borderRadius: '50%', background: t.dotClean,
+            flexShrink: 0, marginLeft: 'auto',
+          }} />
+        );
+      }
+      return null;
+    }
+    // 被忽略项：灰色文本已表达状态，右侧不再显示绿色圆点 / 彩色徽标（对齐 TRAE IDE）
+    if (code === 'I') return null;
+    return (
+      <sup style={{
+        fontSize: 10, fontWeight: 700, marginLeft: 'auto', padding: '0 3px',
+        color: gitBadgeColor(code, t), flexShrink: 0, lineHeight: '16px',
+      }}>
+        {GIT_BADGE_LABEL[code]}
+      </sup>
+    );
+  }, [gitFileMap, gitDirMap, t]);
+
   return (
     <div
       style={{
         position: 'relative',
-        // 根容器铺满侧栏可视高度：sidebar 是 overflow:auto 滚动容器，若容器高度只等于树内容
-        // 高度，节点下方的空白就不在容器内，dragover/drop 不会触发（拖到空白无高亮）。
-        // minHeight 100% 使整个侧栏可视区都属于容器，空白区域即根落点。
-        ...(depth === 0 ? { minHeight: '100%' } : {}),
-        ...(depth === 0 && dragOverRoot ? styles.panelDragOver : {}),
+        ...(depth === 0 ? { minHeight: '100%', display: 'flex', flexDirection: 'column' } : {}),
+        ...(depth === 0 && dragOverRoot ? { background: t.bgRowHover, borderRadius: 4 } : {}),
       }}
       onContextMenu={(e) => {
-        // 空白区域右键：新建于工作区根（节点自身的 onContextMenu 已 stopPropagation，不会冒泡到这里）
         e.preventDefault();
         setMenu({ node: null, x: e.clientX, y: e.clientY });
       }}
       {...(depth === 0
-        ? {
-            onDragOver: handlePanelDragOver,
-            onDragLeave: handlePanelDragLeave,
-            onDrop: handlePanelDrop,
-          }
+        ? { onDragOver: handlePanelDragOver, onDragLeave: handlePanelDragLeave, onDrop: handlePanelDrop }
         : {})}
     >
-      <ul style={{ listStyle: 'none', margin: 0, paddingLeft: depth === 0 ? 0 : 12 }}>
-        {nodes.map((node) => (
-          <li key={node.path}>
-            <div
-              draggable
-              data-tree-row={node.path}
-              onDragStart={handleRowDragStart(node)}
-              onDragEnd={onDragEndNode}
-              onDragOver={node.type === 'directory' ? handleDirDragOver(node) : undefined}
-              onDragLeave={node.type === 'directory' ? handleDirDragLeave(node) : undefined}
-              onDrop={node.type === 'directory' ? handleDirDrop(node) : undefined}
-              onClick={() => (node.type === 'directory' ? onToggleDir(node) : onOpenFile(node.path))}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                e.stopPropagation(); // 节点右键交给节点菜单，不落到空白区域菜单
-                setMenu({ node, x: e.clientX, y: e.clientY });
-              }}
-              style={{
-                ...styles.row,
-                ...(selectedPath === node.path ? styles.rowSelected : {}),
-                ...(dragOverDir === node.path ? styles.rowDragOver : {}),
-                ...(dragSource === node.path ? styles.rowDragging : {}),
-              }}
-            >
-              {(() => {
-                // §15：目录取聚合态（无徽标），文件取精确态（带徽标）
-                const code = node.type === 'directory' ? gitDirMap.get(node.path) : gitFileMap.get(node.path);
-                const color = code ? GIT_COLORS[code] : undefined;
-                return (
-                  <span style={color ? { color } : undefined}>
-                    {node.type === 'directory' ? (node.expanded ? '▾' : '▸') : '📄'} {node.name}
-                    {code && node.type === 'file' && (
-                      <sup style={{ fontSize: 9, marginLeft: 3 }}>{GIT_BADGE[code]}</sup>
-                    )}
-                  </span>
-                );
-              })()}
+      {/* ===== TRAE IDE 风格：分区标题栏（仅根层） ===== */}
+      {depth === 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '8px 10px 4px', userSelect: 'none', flexShrink: 0,
+        }}>
+          {/* 左侧：分区标题（可折叠） */}
+          <div
+            style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', userSelect: 'none' }}
+            onClick={onToggleCollapse}
+          >
+            <ChevronIcon expanded={!collapsed} />
+            <span style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', color: t.textMuted }}>
+              文件
+            </span>
+          </div>
+
+          {/* 右侧：工具栏按钮 */}
+          {!collapsed && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <button title="新建文件" style={{
+                border: 'none', background: 'transparent', cursor: 'pointer',
+                fontSize: 15, lineHeight: 1, color: t.textSecondary, padding: '2px 4px',
+                borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                width: 24, height: 24,
+              }} onMouseEnter={(e) => (e.currentTarget.style.background = t.bgRowHover)}
+                 onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                 onClick={() => onNewFile?.(creationDir)}>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round">
+                  <path d="M7 2v10M2 7h10"/>
+                </svg>
+              </button>
+              <button title="新建文件夹" style={{
+                border: 'none', background: 'transparent', cursor: 'pointer',
+                fontSize: 15, lineHeight: 1, color: t.textSecondary, padding: '2px 4px',
+                borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                width: 24, height: 24,
+              }} onMouseEnter={(e) => (e.currentTarget.style.background = t.bgRowHover)}
+                 onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                 onClick={() => onNewFolder?.(creationDir)}>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M1.5 3.5h4l1.5-1.5h5v9h-10.5V3.5z"/>
+                </svg>
+              </button>
+              <button title="刷新" style={{
+                border: 'none', background: 'transparent', cursor: 'pointer',
+                fontSize: 15, lineHeight: 1, color: t.textSecondary, padding: '2px 4px',
+                borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                width: 24, height: 24,
+              }} onMouseEnter={(e) => (e.currentTarget.style.background = t.bgRowHover)}
+                 onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                 onClick={onRefresh}>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M1 7a6 6 0 0110.5-4"/>
+                  <path d="M13 7a6 6 0 01-10.5 4"/>
+                  <path d="M11.5 2v2.5H9"/>
+                  <path d="M2.5 12V9.5H5"/>
+                </svg>
+              </button>
+              <button title="全部折叠" style={{
+                border: 'none', background: 'transparent', cursor: 'pointer',
+                fontSize: 15, lineHeight: 1, color: t.textSecondary, padding: '2px 4px',
+                borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                width: 24, height: 24,
+              }} onMouseEnter={(e) => (e.currentTarget.style.background = t.bgRowHover)}
+                 onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                 onClick={onToggleCollapse}>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M2 3h10M2 7h10M2 11h10"/>
+                </svg>
+              </button>
             </div>
+          )}
+        </div>
+      )}
 
-            {node.type === 'directory' && node.expanded && node.children && (
-              <FileTree
-                nodes={node.children}
-                onToggleDir={onToggleDir}
-                onOpenFile={onOpenFile}
-                onNewFile={onNewFile}
-                onNewFolder={onNewFolder}
-                onRename={onRename}
-                onDelete={onDelete}
-                onCopyPath={onCopyPath}
-                selectedPath={selectedPath}
-                gitFileMap={gitFileMap}
-                gitDirMap={gitDirMap}
-                onMoveDrop={onMoveDrop}
-                dragSource={dragSource}
-                dragOverDir={dragOverDir}
-                onDragStartNode={onDragStartNode}
-                onDragEndNode={onDragEndNode}
-                onDragOverDir={onDragOverDir}
-                onMoveToRoot={onMoveToRoot}
-                dragOverRoot={dragOverRoot}
-                onDragOverRoot={onDragOverRoot}
-                depth={depth + 1}
-              />
-            )}
-            {node.loadState === 'loading' && <div style={styles.sub}>加载中…</div>}
-            {node.loadState === 'error' && <div style={styles.err}>加载失败：{node.loadError}</div>}
-            {node.loadState === 'empty' && <div style={styles.sub}>（空目录）</div>}
-          </li>
-        ))}
-      </ul>
+      {/* ===== 文件列表 ===== */}
+      {!collapsed && (
+        <ul
+          style={{
+            listStyle: 'none',
+            margin: 0,
+            padding: '2px 0',
+            flex: 1,
+            overflow: 'hidden',
+            // 根层：轻微左缩进；子目录层：左引导线 + 缩进，明确层级归属
+            ...(depth === 0
+              ? { paddingLeft: 4 }
+              : { marginLeft: 9, paddingLeft: 11, borderLeft: `1px solid ${t.borderLight}` }),
+          }}
+        >
+          {nodes.map((node) => (
+            <li key={node.path}>
+              <div
+                draggable
+                data-tree-row={node.path}
+                onDragStart={handleRowDragStart(node)}
+                onDragEnd={onDragEndNode}
+                onDragOver={node.type === 'directory' ? handleDirDragOver(node) : undefined}
+                onDragLeave={node.type === 'directory' ? handleDirDragLeave(node) : undefined}
+                onDrop={node.type === 'directory' ? handleDirDrop(node) : undefined}
+                onClick={() => (node.type === 'directory' ? onToggleDir(node) : onOpenFile(node.path))}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setMenu({ node, x: e.clientX, y: e.clientY });
+                }}
+                onMouseEnter={() => setHoveredRow(node.path)}
+                onMouseLeave={() => setHoveredRow(null)}
+                style={{
+                  ...{
+                    padding: '1px 8px', cursor: 'pointer', borderRadius: 3,
+                    display: 'flex', alignItems: 'center', gap: 2,
+                    fontSize: 13, lineHeight: '24px', position: 'relative',
+                    userSelect: 'none',
+                    ...(selectedPath === node.path ? { background: t.bgRowSelected } : {}),
+                    ...(dragOverDir === node.path ? { background: t.bgRowHover, outline: `1px dashed ${t.accent}`, outlineOffset: -1 } : {}),
+                    ...(dragSource === node.path ? { opacity: 0.45 } : {}),
+                  },
+                  ...(hoveredRow === node.path ? { background: selectedPath === node.path ? t.bgRowSelected : t.bgRowHover } : {}),
+                }}
+              >
+                {renderRowContent(node)}
+                {renderGitBadge(node)}
+              </div>
 
+              {node.type === 'directory' && node.expanded && node.children && (
+                <FileTree
+                  nodes={node.children}
+                  onToggleDir={onToggleDir}
+                  onOpenFile={onOpenFile}
+                  onNewFile={onNewFile}
+                  onNewFolder={onNewFolder}
+                  creationDir={creationDir}
+                  onRename={onRename}
+                  onDelete={onDelete}
+                  onCopyPath={onCopyPath}
+                  selectedPath={selectedPath}
+                  gitFileMap={gitFileMap}
+                  gitDirMap={gitDirMap}
+                  onMoveDrop={onMoveDrop}
+                  dragSource={dragSource}
+                  dragOverDir={dragOverDir}
+                  onDragStartNode={onDragStartNode}
+                  onDragEndNode={onDragEndNode}
+                  onDragOverDir={onDragOverDir}
+                  onMoveToRoot={onMoveToRoot}
+                  dragOverRoot={dragOverRoot}
+                  onDragOverRoot={onDragOverRoot}
+                  depth={depth + 1}
+                  theme={t}
+                  collapsed={collapsed}
+                  onToggleCollapse={onToggleCollapse}
+                  onRefresh={onRefresh}
+                />
+              )}
+              {node.loadState === 'loading' && <div style={{ ...{ padding: '2px 16px', color: t.textMuted, fontSize: 12 }, paddingLeft: String(16 + (depth + 1) * 18) + 'px' }}>加载中…</div>}
+              {node.loadState === 'error' && <div style={{ ...{ padding: '2px 16px', color: t.danger, fontSize: 12 }, paddingLeft: String(16 + (depth + 1) * 18) + 'px' }}>加载失败：{node.loadError}</div>}
+              {node.loadState === 'empty' && <div style={{ ...{ padding: '2px 16px', color: t.textMuted, fontSize: 12 }, paddingLeft: String(16 + (depth + 1) * 18) + 'px' }}>（空目录）</div>}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* ===== 右键菜单 ===== */}
       {menu && (() => {
-        const n = menu.node; // 局部常量：保证 TS 在回调闭包内的空值收缩可靠
-        // 新建目标目录：空白区 -> ''（工作区根）；目录节点 -> 自身；文件节点 -> 所在父目录
+        const n = menu.node;
         const slash = n ? n.path.lastIndexOf('/') : -1;
         const targetDir = n === null ? '' : n.type === 'directory' ? n.path : slash > 0 ? n.path.slice(0, slash) : '';
-        const showTargetHint = n === null || n.type === 'file'; // 目录节点目标即自身，无需提示
+        const showTargetHint = n === null || n.type === 'file';
         return (
           <>
-            <div style={styles.menuBackdrop} onClick={closeMenu} onContextMenu={(e) => { e.preventDefault(); closeMenu(); }} />
-            <div style={{ ...styles.ctxMenu, left: menu.x, top: menu.y }}>
+            <div style={{ position: 'fixed', inset: 0, zIndex: 100 }} onClick={closeMenu} onContextMenu={(e) => { e.preventDefault(); closeMenu(); }} />
+            <div style={{
+              position: 'fixed', zIndex: 101, left: menu.x, top: menu.y,
+              background: t.bgCtxMenu, border: `1px solid ${t.border}`, borderRadius: 6,
+              boxShadow: t.shadowCtxMenu, padding: 4, display: 'flex', flexDirection: 'column', minWidth: 150,
+            }}>
               {showTargetHint && (
-                <div style={{ ...styles.sub, padding: '4px 10px' }}>
+                <div style={{ padding: '4px 12px', fontSize: 11, color: t.textMuted }}>
                   新建于：{targetDir ? targetDir.split('/').pop() : '工作区根'}
                 </div>
               )}
-              <button style={styles.ctxItem} onClick={() => { onNewFile(targetDir); closeMenu(); }}>
+              <button style={{
+                textAlign: 'left', background: 'transparent', border: 'none',
+                padding: '7px 12px', cursor: 'pointer', fontSize: 13, borderRadius: 4, color: t.textPrimary,
+              }} onMouseEnter={(e) => (e.currentTarget.style.background = t.bgRowHover)}
+                 onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                 onClick={() => { onNewFile(targetDir); closeMenu(); }}>
                 新建文件
               </button>
-              <button style={styles.ctxItem} onClick={() => { onNewFolder(targetDir); closeMenu(); }}>
+              <button style={{
+                textAlign: 'left', background: 'transparent', border: 'none',
+                padding: '7px 12px', cursor: 'pointer', fontSize: 13, borderRadius: 4, color: t.textPrimary,
+              }} onMouseEnter={(e) => (e.currentTarget.style.background = t.bgRowHover)}
+                 onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                 onClick={() => { onNewFolder(targetDir); closeMenu(); }}>
                 新建文件夹
               </button>
               {n && (
                 <>
-                  <button style={styles.ctxItem} onClick={() => { onRename(n); closeMenu(); }}>
+                  <div style={{ height: 1, background: t.border, margin: '3px 6px' }} />
+                  <button style={{
+                    textAlign: 'left', background: 'transparent', border: 'none',
+                    padding: '7px 12px', cursor: 'pointer', fontSize: 13, borderRadius: 4, color: t.textPrimary,
+                  }} onMouseEnter={(e) => (e.currentTarget.style.background = t.bgRowHover)}
+                     onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                     onClick={() => { onRename(n); closeMenu(); }}>
                     重命名
                   </button>
-                  <button style={styles.ctxItem} onClick={() => { onDelete(n); closeMenu(); }}>
+                  <button style={{
+                    textAlign: 'left', background: 'transparent', border: 'none',
+                    padding: '7px 12px', cursor: 'pointer', fontSize: 13, borderRadius: 4, color: t.danger,
+                  }} onMouseEnter={(e) => (e.currentTarget.style.background = t.bgRowHover)}
+                     onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                     onClick={() => { onDelete(n); closeMenu(); }}>
                     删除
                   </button>
-                  <button style={styles.ctxItem} onClick={() => { onCopyPath(n); closeMenu(); }}>
-                    复制文件路径
+                  <button style={{
+                    textAlign: 'left', background: 'transparent', border: 'none',
+                    padding: '7px 12px', cursor: 'pointer', fontSize: 13, borderRadius: 4, color: t.textPrimary,
+                  }} onMouseEnter={(e) => (e.currentTarget.style.background = t.bgRowHover)}
+                     onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                     onClick={() => { onCopyPath(n); closeMenu(); }}>
+                    复制路径
                   </button>
                 </>
               )}

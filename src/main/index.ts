@@ -7,7 +7,7 @@
 // process.env.ELECTRON_RENDERER_URL；生产构建时该变量未设置，renderer
 // 产物位于 out/renderer/index.html（无子目录，见 electron-vite 约定）。
 
-import { app, BrowserWindow, clipboard, ipcMain } from 'electron';
+import { app, BrowserWindow, clipboard, ipcMain, nativeTheme } from 'electron';
 import * as path from 'node:path';
 
 import { FileSystemService } from './services/FileSystemService';
@@ -92,6 +92,12 @@ app.whenReady().then(() => {
     mainWindow?.destroy();
   });
   createWindow();
+
+  // §主题：渲染层切换暗/亮后，驱动原生窗口外观（边框 / 标题栏）同步变化。
+  // 默认跟随系统；仅当应用显式切换时才覆盖（与渲染层 loadTheme 行为一致）。
+  ipcMain.on('theme:apply', (_e, mode: 'dark' | 'light') => {
+    nativeTheme.themeSource = mode;
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

@@ -9,7 +9,8 @@ export type GitStatusCode =
   | 'D' // deleted（已删除）
   | 'U' // untracked（porcelain 的 ??，归一化便于单字母展示）
   | 'C' // conflicted / unmerged（porcelain 的 UU/AA/DD 等）
-  | 'R'; // renamed（--no-renames 下不出现，保留给未来）
+  | 'R' // renamed（--no-renames 下不出现，保留给未来）
+  | 'I'; // ignored（被 .gitignore 忽略，TRAE IDE 显示为灰色）
 
 // path 为绝对路径（主进程已按 workspaceRoot / toplevel 重定位，见 §10.4）
 export interface GitStatusEntry {

@@ -12,10 +12,12 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useFileAPI } from '../hooks/useFileAPI';
 import { styles } from '../styles';
 import { UnsupportedViewer } from './UnsupportedViewer';
+import type { ThemeMode } from '../theme';
 
 interface Props {
   filePath: string;
   renderEditor: (filePath: string) => ReactNode;
+  themeMode: ThemeMode;
 }
 
 type GateState =
@@ -24,7 +26,7 @@ type GateState =
   | { kind: 'unsupported'; message: string }
   | { kind: 'error'; message: string };
 
-export function FilePreviewGate({ filePath, renderEditor }: Props) {
+export function FilePreviewGate({ filePath, renderEditor, themeMode }: Props) {
   const api = useFileAPI();
   // 初始 state 即 checking；App 侧以 key={filePath} 重挂载本组件来重置（切文件即新实例），
   // 不再在 effect 内同步 setState——避免 effect 依赖变化时触发渲染循环
@@ -57,6 +59,7 @@ export function FilePreviewGate({ filePath, renderEditor }: Props) {
       filePath={filePath}
       message={state.kind === 'unsupported' ? state.message : undefined}
       error={state.kind === 'error' ? state.message : undefined}
+      themeMode={themeMode}
     />
   );
 }
