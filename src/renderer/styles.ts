@@ -13,7 +13,7 @@ export function createStyles(t: ThemeTokens): Record<string, CSSProperties> {
     root: { color: t.textSecondary, fontSize: 12 },
     status: { color: t.danger, fontSize: 12, marginLeft: 'auto' },
     body: { display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' },
-    sidebar: { width: 260, borderRight: `1px solid ${t.border}`, overflow: 'auto', padding: 0, background: t.bgSidebar, display: 'flex', flexDirection: 'column' },
+    sidebar: { width: 260, borderRight: `1px solid ${t.border}`, overflow: 'auto', padding: 0, background: t.bgSidebar, display: 'flex', flexDirection: 'column', minHeight: 0 },
     // §17 可拖拽分栏
     splitter: { flex: '0 0 auto', width: 5, cursor: 'col-resize', background: t.border, margin: 0, transition: 'background 0.15s', flexShrink: 0 },
     splitterActive: { background: t.accent },

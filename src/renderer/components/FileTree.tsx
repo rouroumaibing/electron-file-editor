@@ -305,7 +305,7 @@ export function FileTree({
     <div
       style={{
         position: 'relative',
-        ...(depth === 0 ? { minHeight: '100%', display: 'flex', flexDirection: 'column' } : {}),
+        ...(depth === 0 ? { height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } : {}),
         ...(depth === 0 && dragOverRoot ? { background: t.bgRowHover, borderRadius: 4 } : {}),
       }}
       onContextMenu={(e) => {
@@ -399,9 +399,10 @@ export function FileTree({
             listStyle: 'none',
             margin: 0,
             padding: '2px 0',
-            flex: 1,
-            overflow: 'hidden',
-            // 根层：轻微左缩进；子目录层：左引导线 + 缩进，明确层级归属
+          flex: 1,
+          overflowY: 'auto',
+          minHeight: 0,
+          // 根层：轻微左缩进；子目录层：左引导线 + 缩进，明确层级归属
             ...(depth === 0
               ? { paddingLeft: 4 }
               : { marginLeft: 9, paddingLeft: 11, borderLeft: `1px solid ${t.borderLight}` }),
